@@ -1,54 +1,75 @@
 ---
+# Installed from upstream tarball: the Ubuntu phpmyadmin package pulls in PHP 8.x
 -
-  name: Set some installation parameters
-  ansible.builtin.debconf:
-    name: phpmyadmin
-    question: "{{ item.question }}"
-    value: '{{ item.value }}'
-    vtype: "{{ item.vtype }}"
-  no_log: true
+  name: Download phpMyAdmin {{ phpmyadmin_ver }}
+  ansible.builtin.get_url:
+    url: https://files.phpmyadmin.net/phpMyAdmin/{{ phpmyadmin_ver }}/phpMyAdmin-{{ phpmyadmin_ver }}-all-languages.tar.gz
+    dest: /usr/src/phpMyAdmin-{{ phpmyadmin_ver }}-all-languages.tar.gz
+    checksum: sha256:{{ phpmyadmin_sha256 }}
+    mode: '0664'
+-
+  name: Unpacking phpMyAdmin tarball
+  ansible.builtin.unarchive:
+    src: /usr/src/phpMyAdmin-{{ phpmyadmin_ver }}-all-languages.tar.gz
+    dest: /usr/share
+    remote_src: true
+    owner: root
+    group: root
+    extra_opts:
+      - --no-same-owner
+    creates: "{{ phpmyadmin_dir }}/index.php"
+-
+  name: Link phpMyAdmin to installed version
+  ansible.builtin.file:
+    src: "{{ phpmyadmin_dir }}"
+    dest: /usr/share/phpmyadmin
+    state: link
+-
+  name: Create phpMyAdmin directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: root
+    group: asterisk
+    mode: "{{ item.mode }}"
+    state: directory
   with_items:
-    -
-      question: phpmyadmin/dbconfig-install
-      value: 'true'
-      vtype: 'boolean'
-    -
-      question: phpmyadmin/app-password-confirm
-      value: '{{ db_root_pass }}'
-      vtype: 'password'
-    -
-      question: phpmyadmin/mysql/admin-pass
-      value: '{{ db_root_pass }}'
-      vtype: 'password'
-    -
-      question: phpmyadmin/mysql/app-pass
-      value: '{{ db_root_pass }}'
-      vtype: 'password'
-    -
-      question: phpmyadmin/reconfigure-webserver
-      value: 'apache2'
-      vtype: 'multiselect'
-    -
-      question: phpmyadmin/internal/skip-preseed
-      value: 'true'
-      vtype: 'boolean'
+    - path: /etc/phpmyadmin
+      mode: '0750'
+    - path: /var/lib/phpmyadmin
+      mode: '0750'
 -
-  name: Installing packages
-  ansible.builtin.apt:
-    name: "{{ packages }}"
-    update_cache: true
-    state: present
+  name: Create phpMyAdmin temp folder
+  ansible.builtin.file:
+    path: /var/lib/phpmyadmin/tmp
+    owner: asterisk
+    group: asterisk
+    mode: '0750'
+    state: directory
 -
-  name: Enable php mod
-  ansible.builtin.shell:
-    cmd: "{{ item }}"
-    creates: phpenmod.ok
-    executable: /bin/bash
-  with_items:
-    - phpenmod mbstring
-    - touch phpenmod.ok
+  name: Create phpMyAdmin config
+  ansible.builtin.template:
+    src: config.inc.php.j2
+    dest: /etc/phpmyadmin/config.inc.php
+    owner: root
+    group: asterisk
+    mode: '0640'
+    force: false
 -
-  name: Restart Apache
-  ansible.builtin.service:
-    name: apache2
-    state: restarted
+  name: Link phpMyAdmin config
+  ansible.builtin.file:
+    src: /etc/phpmyadmin/config.inc.php
+    dest: "{{ phpmyadmin_dir }}/config.inc.php"
+    state: link
+-
+  name: Create phpMyAdmin Apache config
+  ansible.builtin.template:
+    src: phpmyadmin.conf.j2
+    dest: /etc/apache2/conf-available/phpmyadmin.conf
+    mode: '0644'
+  notify: Restart phpmyadmin apache
+-
+  name: Enable phpMyAdmin Apache config
+  ansible.builtin.command:
+    cmd: a2enconf phpmyadmin
+    creates: /etc/apache2/conf-enabled/phpmyadmin.conf
+  notify: Restart phpmyadmin apache

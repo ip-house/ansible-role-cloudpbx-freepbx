@@ -1,4 +1,17 @@
 ---
+- name: Check supported Ubuntu release
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == 'Ubuntu'
+      - ansible_distribution_version in ['22.04', '24.04']
+    fail_msg: This playbook supports Ubuntu 22.04 and 24.04 only
+
+- name: Check customer name
+  ansible.builtin.assert:
+    that:
+      - customer_name is match('^[a-z0-9]([a-z0-9-]{0,48}[a-z0-9])?$')
+    fail_msg: Customer name must be lowercase letters, digits and dashes (e.g. balkan-hidraulik)
+
 - name: Remove legacy NodeSource repo definition before apt refresh
   ansible.builtin.file:
     path: /etc/apt/sources.list.d/nodesource.list
@@ -13,13 +26,17 @@
   ansible.builtin.apt:
     upgrade: full
     update_cache: true
+  register: sysprep_initial_upgrade
+  until: sysprep_initial_upgrade is succeeded
+  retries: 5
+  delay: 30
 
-- name: Install php7.4 install prerequisite
+- name: Install php{{ php_ver }} install prerequisite
   ansible.builtin.apt:
     name: software-properties-common
     state: present
 
-- name: Add php7.4 repo
+- name: Add php{{ php_ver }} repo
   ansible.builtin.apt_repository:
     repo: ppa:ondrej/php
 
@@ -27,34 +44,28 @@
   ansible.builtin.apt:
     upgrade: full
     update_cache: true
+  register: sysprep_upgrade
+  until: sysprep_upgrade is succeeded
+  retries: 5
+  delay: 30
 
 - name: Installing Packages
   ansible.builtin.apt:
     name: "{{ packages }}"
     state: present
+  register: sysprep_packages
+  until: sysprep_packages is succeeded
+  retries: 5
+  delay: 30
 
-- name: Install Ubuntu20.04 specific package
-  ansible.builtin.apt:
-    name: python-dev
-    state: present
-  when: ansible_distribution == 'Ubuntu' and ansible_distribution_major_version == '20'
+- name: Get default php
+  ansible.builtin.command: readlink -f /etc/alternatives/php
+  register: sysprep_php_alternative
+  changed_when: false
 
-- name: Install Ubuntu22.04 specific package
-  ansible.builtin.apt:
-    name: python3-dev
-    state: present
-  when: ansible_distribution == 'Ubuntu' and ansible_distribution_major_version == '22'
-
-- name: Install pymysql ansible modules
-  ansible.builtin.pip:
-    name: pymysql
-    state: present
-
-- name: Set defatult php7.4 as default
-  ansible.builtin.shell: update-alternatives --set php /usr/bin/php7.4 > php-default.ok
-  args:
-    creates: php-default.ok
-    executable: /bin/bash
+- name: Set php{{ php_ver }} as default
+  ansible.builtin.command: update-alternatives --set php /usr/bin/php{{ php_ver }}
+  when: sysprep_php_alternative.stdout != '/usr/bin/php' ~ php_ver
 
 - name: Set swappiness
   ansible.builtin.lineinfile:
@@ -65,10 +76,16 @@
 
 - name: Install Legacy Pear Requirements
   ansible.builtin.shell:
-    cmd: pear install Console_Getopt > /tmp/pear.log
-    creates: /tmp/pear.log
+    cmd: pear install Console_Getopt
+    creates: /usr/share/php/Console/Getopt.php
   when: fpbx_ver == '15.0'
   ignore_errors: true
 
+- name: Check if reboot is required
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: sysprep_reboot_required
+
 - name: Reboot host
   ansible.builtin.reboot:
+  when: sysprep_reboot_required.stat.exists

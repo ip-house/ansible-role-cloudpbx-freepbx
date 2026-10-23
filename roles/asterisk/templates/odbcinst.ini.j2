@@ -1,5 +1,4 @@
 [MySQL]
-Description = ODBC for MySQL (MariaDB)
-Driver=/usr/lib/odbc/libmyodbc5w.so
-Setup=/usr/lib/odbc/libodbcmy5S.so
+Description = MariaDB Connector/ODBC
+Driver = /usr/lib/{{ ansible_architecture }}-linux-gnu/odbc/libmaodbc.so
 FileUsage = 1

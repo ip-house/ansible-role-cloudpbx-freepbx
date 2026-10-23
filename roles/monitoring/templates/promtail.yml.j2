@@ -1,0 +1,24 @@
+server:
+  http_listen_address: 127.0.0.1
+  http_listen_port: 9080
+  grpc_listen_address: 127.0.0.1
+  grpc_listen_port: 0
+
+positions:
+  filename: /var/lib/promtail/positions.yaml
+
+clients:
+- url: http://{{ loki_hostname }}/loki/api/v1/push
+  tls_config:
+    insecure_skip_verify: true
+
+scrape_configs:
+  - job_name: asterisk
+    static_configs:
+    - targets:
+      - localhost
+      labels:
+        __path__: /var/log/asterisk/full
+        host_ip: {{ monitoring_host_ip }}
+        hostname: {{ fpbx_hostname }}
+        provider: {{ monitoring_provider }}

@@ -1,18 +1,41 @@
-## Deploy Cloud PBX Freepbx ####
-## Updated to work on Ubuntu Server 20.04 and 22.04###
 ---
+## Deploy Cloud PBX Freepbx ####
+## Supports Ubuntu Server 22.04 and 24.04 ###
+## Prompts can be skipped with -e, e.g. -e customer_name=acme ###
 -
-  name: Depoying CloudPBX Freepbx
+  name: Deploy CloudPBX Freepbx
   hosts: all
   become: true
+  vars_prompt:
+    - name: customer_name
+      prompt: Customer name (hostname becomes <name>-pbx.cloudpbx.rs)
+      private: false
+    - name: db_root_pass
+      prompt: DB root password (Enter = DB_ROOT_PASS from environment)
+      private: true
+      default: "{{ lookup('env', 'DB_ROOT_PASS') }}"
+    - name: monitoring_provider
+      prompt: Provider label for Loki logs
+      private: false
+      default: nc
   vars:
-    db_root_pass: "{{ lookup('env','DB_ROOT_PASS') }}"
-    fpbx_ver: 16.0
+    # FreePBX 16 supports PHP 7.4 only
+    php_ver: "7.4"
+    fpbx_ver: "16.0"
+    fpbx_release: "16.0.40.7"
+    fpbx_sha256: 8a62645861d212b17c1ccec87a3c71d3e46aed970c80b3d7fed73ae3df7c8a00
     ast_ver: 20
+    ast_country_code: "381"
+    pbx_domain: cloudpbx.rs
+    fpbx_hostname: "{{ customer_name }}-pbx.{{ pbx_domain }}"
+    # Module updates are applied by hand; FreePBX sends no update mails
+    fpbx_auto_module_updates: disabled
+    fpbx_auto_security_updates: emailonly
+    fpbx_notification_email: ""
   roles:
     - sysprep
     - db_prep
     - asterisk
     - freepbx
     - phpmyadmin
-    - webmin
+    - monitoring

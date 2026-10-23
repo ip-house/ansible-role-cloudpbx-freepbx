@@ -1,49 +1,38 @@
 ---
-# Setup ODBC connector
 -
-  name: Download MariaDB Connector
-  ansible.builtin.get_url:
-    url: https://cdn.mysql.com/archives/mysql-connector-odbc-5.3/mysql-connector-odbc-5.3.10-linux-ubuntu17.10-x86-64bit.tar.gz
-    dest: /usr/src/mysql-connector-odbc-5.3.10-linux-ubuntu17.10-x86-64bit.tar.gz
-    mode: '0664'
--
-  name: Untar MariaDB Connector
-  ansible.builtin.unarchive:
-    src: /usr/src/mysql-connector-odbc-5.3.10-linux-ubuntu17.10-x86-64bit.tar.gz
-    dest: /usr/src
-    remote_src: true
--
-  name: Copy ODBC Connector lib files
-  ansible.builtin.copy:
-    remote_src: true
-    src: /usr/src/mysql-connector-odbc-5.3.10-linux-ubuntu17.10-x86-64bit/lib/
-    dest: /usr/lib/odbc
-    mode: u=rwx,g=rx,o=rx
+  name: Check DB root password is set
+  ansible.builtin.assert:
+    that:
+      - db_root_pass is defined
+      - db_root_pass | length > 0
+    fail_msg: Set DB_ROOT_PASS in the environment
 -
   name: Change DB listener from localhost to all interfaces
   ansible.builtin.replace:
     path: /etc/mysql/mariadb.conf.d/50-server.cnf
     regexp: '127.0.0.1'
     replace: '0.0.0.0'
+  notify: Restart mysql
 -
   name: Disable Strict Trans Tables mode
   ansible.builtin.lineinfile:
     path: /etc/mysql/mariadb.conf.d/50-server.cnf
     insertafter: [mysqld]
     line: sql_mode=''
+  notify: Restart mysql
 
 ## START: Secure DB
 -
   name: Secure DB - Set root password
-  failed_when: >
-    (db_root_pass is not defined) or
-    (db_root_pass == "")
   community.mysql.mysql_user:
     login_unix_socket: /var/run/mysqld/mysqld.sock
+    login_user: "root"
+    login_password: "{{ db_root_pass }}"
     name: root
     host: "{{ item }}"
     password: "{{ db_root_pass }}"
     state: present
+  no_log: true
   with_items:
     - 127.0.0.1
     - ::1
@@ -57,6 +46,7 @@
     name: ""
     host: "{{ item }}"
     state: absent
+  no_log: true
   with_items:
     - localhost
     - "{{ ansible_nodename }}"
@@ -69,6 +59,7 @@
     name: root
     host: "{{ ansible_nodename }}"
     state: absent
+  no_log: true
 -
   name: Secure DB - Remove Test DB
   community.mysql.mysql_db:
@@ -77,16 +68,16 @@
     login_password: "{{ db_root_pass }}"
     name: test
     state: absent
+  no_log: true
 -
   name: Disable linux socket root login
   community.mysql.mysql_query:
     login_user: "root"
     login_password: "{{ db_root_pass }}"
     query: UPDATE mysql.user SET plugin = '' WHERE user = 'root' AND host = 'localhost'
+  no_log: true
   ignore_errors: true
 ## END Secure DB
 
-- name: Restart mysql service
-  ansible.builtin.systemd:
-    name: mysql
-    state: restarted
+- name: Apply pending mysql changes
+  ansible.builtin.meta: flush_handlers

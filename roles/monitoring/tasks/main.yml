@@ -1,0 +1,189 @@
+---
+- name: Install node exporter
+  ansible.builtin.apt:
+    name: prometheus-node-exporter
+    state: present
+
+# Listen only on the private IP Prometheus scrapes
+- name: Set node exporter listen address
+  ansible.builtin.lineinfile:
+    path: /etc/default/prometheus-node-exporter
+    regexp: '^ARGS='
+    line: ARGS="--web.listen-address={{ monitoring_host_ip }}:9100"
+  notify: Restart node exporter
+
+- name: Create node exporter service override folder
+  ansible.builtin.file:
+    path: /etc/systemd/system/prometheus-node-exporter.service.d
+    state: directory
+    mode: '0755'
+
+# The listen IP must exist before start, so wait for the network and retry slowly
+- name: Create node exporter service override
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/prometheus-node-exporter.service.d/override.conf
+    content: |
+      [Unit]
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      RestartSec=5
+    mode: '0644'
+  notify: Restart node exporter
+
+- name: Enable node exporter
+  ansible.builtin.service:
+    name: prometheus-node-exporter
+    state: started
+    enabled: true
+
+## START: mysqld_exporter
+- name: Download mysqld_exporter {{ mysqld_exporter_ver }}
+  ansible.builtin.get_url:
+    url: https://github.com/prometheus/mysqld_exporter/releases/download/v{{ mysqld_exporter_ver }}/{{ mysqld_exporter_name }}.tar.gz
+    dest: /usr/src/{{ mysqld_exporter_name }}.tar.gz
+    checksum: sha256:{{ mysqld_exporter_sha256[monitoring_arch] }}
+    mode: '0664'
+
+- name: Unpacking mysqld_exporter tarball
+  ansible.builtin.unarchive:
+    src: /usr/src/{{ mysqld_exporter_name }}.tar.gz
+    dest: /usr/src
+    remote_src: true
+    extra_opts:
+      - --no-same-owner
+    creates: /usr/src/{{ mysqld_exporter_name }}/mysqld_exporter
+
+- name: Install mysqld_exporter binary
+  ansible.builtin.copy:
+    src: /usr/src/{{ mysqld_exporter_name }}/mysqld_exporter
+    dest: /usr/local/bin/mysqld_exporter
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0755'
+  notify: Restart mysqld_exporter
+
+- name: Add mysqld_exporter user
+  ansible.builtin.user:
+    name: mysqld_exporter
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+# unix_socket auth: the OS user logs in without a password
+- name: Add mysqld_exporter DB user
+  community.mysql.mysql_user:
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+    login_user: "root"
+    login_password: "{{ db_root_pass }}"
+    name: mysqld_exporter
+    host: localhost
+    plugin: unix_socket
+    priv: "*.*:PROCESS,REPLICATION CLIENT,SELECT"
+    resource_limits:
+      MAX_USER_CONNECTIONS: 3
+    state: present
+  no_log: true
+
+- name: Create mysqld_exporter config folder
+  ansible.builtin.file:
+    path: /etc/mysqld_exporter
+    owner: root
+    group: mysqld_exporter
+    mode: '0750'
+    state: directory
+
+- name: Create mysqld_exporter config
+  ansible.builtin.template:
+    src: mysqld_exporter.my.cnf.j2
+    dest: /etc/mysqld_exporter/my.cnf
+    owner: root
+    group: mysqld_exporter
+    mode: '0640'
+  notify: Restart mysqld_exporter
+
+- name: Create mysqld_exporter service
+  ansible.builtin.template:
+    src: mysqld_exporter.service.j2
+    dest: /etc/systemd/system/mysqld_exporter.service
+    mode: '0644'
+  notify: Restart mysqld_exporter
+
+- name: Enable mysqld_exporter service
+  ansible.builtin.systemd:
+    name: mysqld_exporter
+    state: started
+    enabled: true
+    daemon_reload: true
+## END mysqld_exporter
+
+## START: promtail
+- name: Download promtail {{ promtail_ver }}
+  ansible.builtin.get_url:
+    url: https://github.com/grafana/loki/releases/download/v{{ promtail_ver }}/promtail_{{ promtail_ver }}_{{ monitoring_arch }}.deb
+    dest: /usr/src/promtail_{{ promtail_ver }}_{{ monitoring_arch }}.deb
+    checksum: sha256:{{ promtail_sha256[monitoring_arch] }}
+    mode: '0664'
+
+- name: Install promtail
+  ansible.builtin.apt:
+    deb: /usr/src/promtail_{{ promtail_ver }}_{{ monitoring_arch }}.deb
+  notify: Restart promtail
+
+# Read-only ACL on the Asterisk logs; the asterisk group could also write
+# /etc/asterisk and read /etc/freepbx.conf
+- name: Install acl tools
+  ansible.builtin.apt:
+    name: acl
+    state: present
+
+- name: Allow promtail to read Asterisk logs
+  ansible.posix.acl:
+    path: "{{ item.path }}"
+    entity: promtail
+    etype: user
+    permissions: "{{ item.permissions }}"
+    default: "{{ item.default }}"
+    state: present
+  with_items:
+    - {path: /var/log/asterisk, permissions: rx, default: false}
+    # Inherited by files logrotate and Asterisk create later
+    - {path: /var/log/asterisk, permissions: r, default: true}
+    - {path: /var/log/asterisk/full, permissions: r, default: false}
+  notify: Restart promtail
+
+- name: Create promtail state folder
+  ansible.builtin.file:
+    path: /var/lib/promtail
+    owner: promtail
+    group: root
+    mode: '0750'
+    state: directory
+
+# Same markers as the old manual script, so existing blocks are replaced
+- name: Add Loki servers to /etc/hosts
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} LOKI HOSTS BLOCK (Managed by script)"
+    block: |
+      {% for ip in loki_server_ips %}
+      {{ ip }} {{ loki_hostname }}
+      {% endfor %}
+
+- name: Create promtail config
+  ansible.builtin.template:
+    src: promtail.yml.j2
+    dest: /etc/promtail/config.yml
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart promtail
+
+- name: Enable promtail service
+  ansible.builtin.service:
+    name: promtail
+    state: started
+    enabled: true
+## END promtail

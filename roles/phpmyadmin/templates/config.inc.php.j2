@@ -1,0 +1,11 @@
+<?php
+// Generated once by Ansible; the secret is kept on later runs
+$cfg['blowfish_secret'] = '{{ lookup('ansible.builtin.password', '/dev/null length=32 chars=ascii_letters,digits') }}';
+
+$i = 0;
+$i++;
+$cfg['Servers'][$i]['auth_type'] = 'cookie';
+$cfg['Servers'][$i]['host'] = 'localhost';
+$cfg['Servers'][$i]['AllowNoPassword'] = false;
+
+$cfg['TempDir'] = '/var/lib/phpmyadmin/tmp';

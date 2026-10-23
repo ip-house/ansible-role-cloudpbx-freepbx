@@ -1,21 +1,24 @@
 ---
-- name: Downloading FreePBX {{ fpbx_ver }}
+- name: Downloading FreePBX {{ fpbx_release }}
   ansible.builtin.get_url:
-    url: http://mirror.freepbx.org/modules/packages/freepbx/freepbx-{{ fpbx_ver }}-latest.tgz
-    dest: /usr/src
+    url: https://mirror.freepbx.org/modules/packages/freepbx/freepbx-{{ fpbx_release }}.tgz
+    dest: /usr/src/freepbx-{{ fpbx_release }}.tgz
+    checksum: sha256:{{ fpbx_sha256 }}
     mode: '0664'
 
 - name: Unpacking FreePBX tarball
   ansible.builtin.unarchive:
-    src: /usr/src/freepbx-{{ fpbx_ver }}-latest.tgz
+    src: /usr/src/freepbx-{{ fpbx_release }}.tgz
     dest: /usr/src
     remote_src: true
+    creates: /usr/src/freepbx/install
 
-- name: Removing FreePBX tarball
-  ansible.builtin.file:
-    path: /usr/src/freepbx-{{ fpbx_ver }}-latest.tgz
-    state: absent
+- name: Check if FreePBX is installed
+  ansible.builtin.stat:
+    path: /etc/freepbx.conf
+  register: freepbx_conf
 
+# The installer replaces these with symlinks into /var/www/html
 - name: Creating some asterisk files
   ansible.builtin.file:
     path: /etc/asterisk/{{ item }}.conf
@@ -24,23 +27,31 @@
   with_items:
     - modules
     - cdr
+  when: not freepbx_conf.stat.exists
 
 - name: Starting FreePBX
   ansible.builtin.shell:
-    cmd: "{{ item }}"
+    cmd: |
+      set -euo pipefail
+      ./start_asterisk start
+      ./install -n --dbuser root --dbpass "$FPBX_DB_PASS"
     chdir: /usr/src/freepbx
-    creates: start-fpbx.ok
+    creates: /etc/freepbx.conf
     executable: /bin/bash
-  no_log: false
-  with_items:
-    - ./start_asterisk start
-    - ./install -n --dbuser root --dbpass {{ db_root_pass }}
-    - touch start-fpbx.ok
+  environment:
+    FPBX_DB_PASS: "{{ db_root_pass }}"
+  register: freepbx_install
+
+- name: Create cloudpbx state folder
+  ansible.builtin.file:
+    path: /var/lib/cloudpbx
+    state: directory
+    mode: '0755'
 
 - name: Install FreePBX Modules
   ansible.builtin.shell: "{{ item }}"
   args:
-    creates: fpbx-started.ok
+    creates: /var/lib/cloudpbx/fpbx-modules.ok
     executable: /bin/bash
   with_items:
     - fwconsole ma enablerepo standard
@@ -63,7 +74,8 @@
     - fwconsole ma upgradeall
     - fwconsole reload
     - fwconsole restart
-    - touch fpbx-started.ok
+    - fwconsole chown
+    - touch /var/lib/cloudpbx/fpbx-modules.ok
 
 - name: Create FreePBX Startup service
   ansible.builtin.template:
@@ -78,7 +90,28 @@
 
 - name: Set hostname
   ansible.builtin.hostname:
-    name: fpbx.local
+    name: "{{ fpbx_hostname }}"
 
-- name: Reboot host
+- name: Add hostname to /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s'
+    line: "127.0.1.1 {{ fpbx_hostname }} {{ fpbx_hostname.split('.')[0] }}"
+
+- name: Create FreePBX update settings script
+  ansible.builtin.template:
+    src: update-settings.php.j2
+    dest: /usr/local/sbin/cloudpbx-fpbx-update-settings.php
+    owner: root
+    group: asterisk
+    mode: '0640'
+
+# Runs as asterisk so FreePBX does not leave root-owned cache files behind
+- name: Apply FreePBX update settings
+  ansible.builtin.command: runuser -u asterisk -- php /usr/local/sbin/cloudpbx-fpbx-update-settings.php
+  register: freepbx_update_settings
+  changed_when: freepbx_update_settings.stdout == 'changed'
+
+- name: Reboot host after FreePBX install
   ansible.builtin.reboot:
+  when: freepbx_install is changed

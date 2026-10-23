@@ -1,0 +1,20 @@
+---
+monitoring_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_architecture] }}"
+monitoring_host_ip: "{{ ansible_default_ipv4.address }}"
+
+mysqld_exporter_ver: "0.17.2"
+mysqld_exporter_sha256:
+  amd64: ef6a2322b869d7d3c1ee3493e28a939ff80b367373142b9b2f3f70a6709d00d7
+  arm64: 7d7ba18830ca374812a75cca1519b7c2fdea6d14183787bcd1b36900cdf588ee
+mysqld_exporter_name: mysqld_exporter-{{ mysqld_exporter_ver }}.linux-{{ monitoring_arch }}
+
+# Grafana publishes no checksums for the .deb files; these were taken from the release download
+promtail_ver: "3.5.0"
+promtail_sha256:
+  amd64: 802c5bf3c939267546505f6938d1362ab4688edbc7054dfcae11e5406c7a2acb
+  arm64: d07ef795718191125fb90971be5e7a83f6e462f2aa99582a9a4f67c4666b906d
+
+loki_hostname: loki.cloudoffice.local
+loki_server_ips:
+  - 10.0.8.1
+  - 10.0.8.2

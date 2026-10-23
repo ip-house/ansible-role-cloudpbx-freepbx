@@ -1,93 +1,104 @@
 ---
+- name: Get Asterisk {{ ast_ver }} release checksum
+  ansible.builtin.uri:
+    url: https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-{{ ast_ver }}-current.sha256
+    return_content: true
+  register: asterisk_release
+
+- name: Set Asterisk release facts
+  ansible.builtin.set_fact:
+    asterisk_sha256: "{{ asterisk_release.content.split()[0] }}"
+    asterisk_tarball: "{{ asterisk_release.content.split()[1] }}"
+    asterisk_src_dir: "/usr/src/{{ asterisk_release.content.split()[1] | replace('.tar.gz', '') }}"
+
 - name: Download Asterisk {{ ast_ver }}
   ansible.builtin.get_url:
-    url: http://downloads.asterisk.org/pub/telephony/asterisk/asterisk-{{ ast_ver }}-current.tar.gz
-    dest: /usr/src
+    url: https://downloads.asterisk.org/pub/telephony/asterisk/releases/{{ asterisk_tarball }}
+    dest: /usr/src/{{ asterisk_tarball }}
+    checksum: sha256:{{ asterisk_sha256 }}
     mode: '0664'
 
 - name: Untar Asterisk tarball
   ansible.builtin.unarchive:
-    src: /usr/src/asterisk-{{ ast_ver }}-current.tar.gz
+    src: /usr/src/{{ asterisk_tarball }}
     dest: /usr/src
     remote_src: true
-
-- name: Remove Asterisk tarball
-  ansible.builtin.file:
-    path: /usr/src/asterisk-{{ ast_ver }}-current.tar.gz
-    state: absent
-
-- name: Find extracted folder name for Asterisk {{ ast_ver }}
-  ansible.builtin.find:
-    paths: /usr/src
-    file_type: directory
-    recurse: false
-    patterns: ^asterisk.*$
-    use_regex: true
-  register: 'ast_install_dir'
+    creates: "{{ asterisk_src_dir }}/configure"
 
 - name: Make Libvpb1 install non-interactive
-  ansible.builtin.shell:
-    cmd: "{{ item }}"
-    creates: libvpb1.ok
-    executable: /bin/bash
-  with_items:
-    - set -o pipefail
-    - echo 'libvpb1 libvpb1/countrycode string 381' | sudo debconf-set-selections -v
-    - touch libvpb1.ok
+  ansible.builtin.debconf:
+    name: libvpb1
+    question: libvpb1/countrycode
+    value: "{{ ast_country_code }}"
+    vtype: string
 
 - name: Install Asterisk Prerequisites
   ansible.builtin.shell:
-    cmd: "{{ item }}"
-    chdir: "{{ ast_install_dir.files[0].path }}/contrib/scripts"
+    cmd: |
+      set -euo pipefail
+      ./install_prereq install
+      touch asterisk-prereq.ok
+    chdir: "{{ asterisk_src_dir }}/contrib/scripts"
     creates: asterisk-prereq.ok
     executable: /bin/bash
-  with_items:
-    - ./get_mp3_source.sh
-    - ./install_prereq install
-    - touch asterisk-prereq.ok
+  register: asterisk_prereq
+  until: asterisk_prereq is succeeded
+  retries: 3
+  delay: 30
+
+- name: Download MP3 source
+  ansible.builtin.command:
+    cmd: contrib/scripts/get_mp3_source.sh
+    chdir: "{{ asterisk_src_dir }}"
+    creates: addons/mp3/mpg123.h
 
 - name: Run configure asterisk scripts
   ansible.builtin.shell:
-    cmd: "{{ item }}"
-    chdir: "{{ ast_install_dir.files[0].path }}"
+    cmd: |
+      set -euo pipefail
+      ./configure --with-pjproject-bundled --with-jansson-bundled
+      touch ast-scripts.ok
+    chdir: "{{ asterisk_src_dir }}"
     creates: ast-scripts.ok
     executable: /bin/bash
-  with_items:
-    - ./configure --with-pjproject-bundled --with-jansson-bundled
-    - touch ast-scripts.ok
 
 - name: Select make options
   ansible.builtin.shell:
-    cmd: "{{ item }}"
-    chdir: "{{ ast_install_dir.files[0].path }}"
+    cmd: |
+      set -euo pipefail
+      make menuselect.makeopts
+      menuselect/menuselect --enable app_macro --enable format_mp3 menuselect.makeopts
+      touch ast-make-menu.ok
+    chdir: "{{ asterisk_src_dir }}"
     creates: ast-make-menu.ok
     executable: /bin/bash
-  with_items:
-    - make menuselect.makeopts
-    - menuselect/menuselect --enable app_macro --enable format_mp3 menuselect.makeopts
-    - touch ast-make-menu.ok
 
 - name: Compile and Install Asterisk
   ansible.builtin.shell:
-    cmd: "{{ item }}"
-    chdir: "{{ ast_install_dir.files[0].path }}"
+    cmd: |
+      set -euo pipefail
+      make
+      make install
+      make config
+      ldconfig
+      update-rc.d -f asterisk remove
+      touch compiled-asterisk.ok
+    chdir: "{{ asterisk_src_dir }}"
     creates: compiled-asterisk.ok
     executable: /bin/bash
-  with_items:
-    - make
-    - contrib/scripts/get_mp3_source.sh
-    - make install
-    - make config
-    - ldconfig
-    - update-rc.d -f asterisk remove
-    - touch compiled-asterisk.ok
 
 - name: Add asterisk users
   ansible.builtin.user:
     name: asterisk
     comment: Asterisk user
 
-- name: Seting folder permitions for asterisk user
+- name: Check if FreePBX is installed
+  ansible.builtin.stat:
+    path: /etc/freepbx.conf
+  register: asterisk_freepbx_conf
+
+# After install, fwconsole chown owns this (it keeps bin/fwconsole root-owned)
+- name: Set folder permissions for asterisk user
   ansible.builtin.file:
     path: "{{ item }}"
     owner: asterisk
@@ -101,20 +112,14 @@
     - /var/log/asterisk
     - /var/spool/asterisk
     - /usr/lib/asterisk
+  when: not asterisk_freepbx_conf.stat.exists
 
+# FreePBX is installed into /var/www/html, so only clear it before the first install
 - name: Remove default web folder
   ansible.builtin.file:
     path: /var/www/html
     state: absent
-
-- name: Find php version folder name
-  ansible.builtin.find:
-    paths: /etc/php
-    file_type: directory
-    recurse: false
-    patterns: ^7.*$
-    use_regex: true
-  register: 'php_ver'
+  when: not asterisk_freepbx_conf.stat.exists
 
 - name: Making some Apache config changes
   ansible.builtin.lineinfile:
@@ -123,11 +128,11 @@
     line: "{{ item.line }}"
   with_items:
     -
-      path: "{{ php_ver.files[0].path }}/apache2/php.ini"
+      path: /etc/php/{{ php_ver }}/apache2/php.ini
       regexp: "upload_max_filesize ="
       line: "upload_max_filesize = 20M"
     -
-      path: "{{ php_ver.files[0].path }}/apache2/php.ini"
+      path: /etc/php/{{ php_ver }}/apache2/php.ini
       regexp: "memory_limit ="
       line: "memory_limit = 256M"
     -
@@ -138,28 +143,36 @@
       path: /etc/apache2/envvars
       regexp: export APACHE_RUN_GROUP=
       line: export APACHE_RUN_GROUP=asterisk
+  notify: Restart apache
 
-- name: Some more Apache changes
+# Older runs set AllowOverride All globally; FreePBX needs it only in /var/www/html
+- name: Restore default AllowOverride in apache2.conf
   ansible.builtin.replace:
-    path: '/etc/apache2/apache2.conf'
-    regexp: 'AllowOverride None'
-    replace: 'AllowOverride All'
+    path: /etc/apache2/apache2.conf
+    regexp: 'AllowOverride All'
+    replace: 'AllowOverride None'
+  notify: Restart apache
+
+- name: Create FreePBX Apache config
+  ansible.builtin.template:
+    src: freepbx-apache.conf.j2
+    dest: /etc/apache2/conf-available/freepbx.conf
+    mode: '0644'
+  notify: Restart apache
+
+- name: Enable FreePBX Apache config
+  ansible.builtin.command:
+    cmd: a2enconf freepbx
+    creates: /etc/apache2/conf-enabled/freepbx.conf
+  notify: Restart apache
 
 - name: Enable Apache Rewrite Mod
-  ansible.builtin.shell:
-    cmd: "{{ item }}"
-    creates: apache-rewrite.ok
-    executable: /bin/bash
-  with_items:
-    - a2enmod rewrite
-    - touch apache-rewrite.ok
+  ansible.builtin.command:
+    cmd: a2enmod rewrite
+    creates: /etc/apache2/mods-enabled/rewrite.load
+  notify: Restart apache
 
-- name: Restarting Apache Service
-  ansible.builtin.service:
-    name: apache2
-    state: restarted
-
-- name: Seting ODBC files
+- name: Set ODBC files
   ansible.builtin.template:
     src: "{{ item.src }}"
     dest: "{{ item.dest }}"
@@ -169,3 +182,6 @@
       dest: /etc/odbc.ini
     - src: odbcinst.ini.j2
       dest: /etc/odbcinst.ini
+
+- name: Apply pending Apache changes
+  ansible.builtin.meta: flush_handlers

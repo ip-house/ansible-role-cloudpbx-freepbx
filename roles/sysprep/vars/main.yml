@@ -8,16 +8,15 @@ packages:
   - mariadb-client
   - bison
   - flex
-  - php7.4
-  - php7.4-curl
-  - php7.4-cli
-  - php7.4-pdo
-  - php7.4-mysql
+  - php{{ php_ver }}
+  - php{{ php_ver }}-curl
+  - php{{ php_ver }}-cli
+  - php{{ php_ver }}-mysql
   - php-pear
-  - php7.4-gd
-  - php7.4-mbstring
-  - php7.4-intl
-  - php7.4-xml
+  - php{{ php_ver }}-gd
+  - php{{ php_ver }}-mbstring
+  - php{{ php_ver }}-intl
+  - php{{ php_ver }}-xml
   - curl
   - cron
   - sox
@@ -28,7 +27,7 @@ packages:
   - libnewt-dev
   - sqlite3
   - libsqlite3-dev
-  - pkg-config
+  - pkgconf
   - automake
   - libtool
   - autoconf
@@ -50,13 +49,14 @@ packages:
   - subversion
   - libtool-bin
   - unixodbc
+  - odbc-mariadb
   - dirmngr
   - sendmail-bin
   - sendmail
   - nodejs
   - npm
   - xz-utils
-  - python3-pip
+  - python3-pymysql
   - net-tools
   ## Needed for debconf-set-selections
   - debconf-utils

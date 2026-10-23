@@ -1,0 +1,12 @@
+Alias /phpmyadmin /usr/share/phpmyadmin
+
+<Directory /usr/share/phpmyadmin>
+    Options FollowSymLinks
+    DirectoryIndex index.php
+    AllowOverride None
+    Require all granted
+</Directory>
+
+<DirectoryMatch "^/usr/share/phpmyadmin/(libraries|setup|sql|templates|vendor)">
+    Require all denied
+</DirectoryMatch>

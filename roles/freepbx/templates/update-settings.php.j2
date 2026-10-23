@@ -1,0 +1,32 @@
+<?php
+// Managed by Ansible: FreePBX update settings in Module Admin > Scheduler and Alerts.
+// FreePBX rebuilds the asterisk crontab from these on every reload, so they are
+// the only durable way to control update cron jobs and update mails.
+$bootstrap_settings['freepbx_auth'] = false;
+include '/etc/freepbx.conf';
+
+$wanted = [
+    'notification_emails' => '{{ fpbx_notification_email }}',
+    'system_ident' => '{{ fpbx_hostname }}',
+    'auto_module_updates' => '{{ fpbx_auto_module_updates }}',
+    'auto_module_security_updates' => '{{ fpbx_auto_security_updates }}',
+    'unsigned_module_emails' => 'disabled',
+];
+
+$um = new \FreePBX\Builtin\UpdateManager();
+$current = $um->getCurrentUpdateSettings(false);
+$changed = (bool) array_diff_assoc($wanted, array_intersect_key($current, $wanted));
+
+// Crontab can be stale (e.g. edited by hand); rebuild it if it still auto-upgrades
+if ($wanted['auto_module_updates'] !== 'enabled') {
+    foreach (\FreePBX::Cron()->getAll() as $line) {
+        if (strpos($line, 'ma upgradeall') !== false) {
+            $changed = true;
+        }
+    }
+}
+
+if ($changed) {
+    $um->updateUpdateSettings($wanted);
+}
+echo $changed ? "changed\n" : "ok\n";

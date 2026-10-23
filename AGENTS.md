@@ -1,9 +1,9 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-This repository is an Ansible playbook for provisioning FreePBX on Ubuntu. The entry point is `cloudpbx-freepbx.yaml`, which applies the roles in order: `sysprep`, `db_prep`, `asterisk`, `freepbx`, `phpmyadmin`, and `webmin`.
+This repository is an Ansible playbook for provisioning FreePBX on Ubuntu. The entry point is `cloudpbx-freepbx.yaml`, which applies the roles in order: `sysprep`, `db_prep`, `asterisk`, `freepbx`, `phpmyadmin`, and `monitoring`. Interactive `vars_prompt` asks for the customer name, DB root password and Loki provider label; pass them with `-e` to skip the prompts.
 
-Role logic lives in `roles/<role>/tasks/main.yml`. Role-specific variables are kept in `roles/<role>/vars/main.yml` where present, and Jinja templates live under `roles/<role>/templates/` such as `roles/freepbx/templates/freepbx.service.j2`. There is currently no `tests/`, `defaults/`, or `handlers/` tree, so keep new additions consistent with the existing role layout.
+Role logic lives in `roles/<role>/tasks/main.yml`. Role-specific variables are kept in `roles/<role>/vars/main.yml` where present, and Jinja templates live under `roles/<role>/templates/` such as `roles/freepbx/templates/freepbx.service.j2`. Service restarts go through `roles/<role>/handlers/main.yml`. There is currently no `tests/` or `defaults/` tree, so keep new additions consistent with the existing role layout.
 
 ## Build, Test, and Development Commands
 Use these commands from the repository root:
@@ -21,7 +21,7 @@ ansible-playbook -i '<server-ip>,' -u ubuntu cloudpbx-freepbx.yaml
 ## Coding Style & Naming Conventions
 Write YAML with two-space indentation and start files with `---`. Use fully qualified module names such as `ansible.builtin.apt` and `community.mysql.mysql_user`, matching the existing tasks. Variables must stay lowercase `snake_case`; this is enforced by `var_naming_pattern` in `.ansible-lint.yaml`.
 
-Name tasks with short imperative phrases like `Install webmin` or `Restart mysql service`. Prefer idempotent tasks with `state`, `creates`, `when`, and templated files ending in `.j2`.
+Name tasks with short imperative phrases like `Install phpmyadmin` or `Restart mysql service`. Prefer idempotent tasks with `state`, `creates`, `when`, and templated files ending in `.j2`.
 
 ## Testing Guidelines
 There is no dedicated automated test suite or Molecule scenario in this repo. At minimum, every change should pass syntax check, `ansible-lint`, and `pre-commit`. For shell-heavy or package-install changes, also verify a clean run on Ubuntu 22.04 and confirm `DB_ROOT_PASS` is supplied via the environment.

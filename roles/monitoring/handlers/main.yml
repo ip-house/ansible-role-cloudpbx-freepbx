@@ -1,0 +1,17 @@
+---
+- name: Restart node exporter
+  ansible.builtin.systemd:
+    name: prometheus-node-exporter
+    state: restarted
+    daemon_reload: true
+
+- name: Restart mysqld_exporter
+  ansible.builtin.systemd:
+    name: mysqld_exporter
+    state: restarted
+    daemon_reload: true
+
+- name: Restart promtail
+  ansible.builtin.systemd:
+    name: promtail
+    state: restarted
